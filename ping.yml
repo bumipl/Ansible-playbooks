@@ -15,4 +15,3 @@
       port: 22
       timeout: 5
       state: started
-    delegate_to: localhost
