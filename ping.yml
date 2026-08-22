@@ -1,0 +1,18 @@
+---
+- name: ansible ping module for local infra
+  hosts: all
+  gather_facts: false
+
+  tasks:
+
+  - name: simple ping
+    ansible.builtin.ping:
+
+
+  - name: check ssh connectivity
+    ansible.builtin.wait_for:
+      host: "{{ ansible_host }}"
+      port: 22
+      timeout: 5
+      state: started
+    delegate_to: localhost
