@@ -1,8 +1,0 @@
-  - name: create new container snapshot
-    community.general.proxmox_snap:
-      api_user: "{{ api_user }}"
-      api_password: "{{ api_password }}"
-      api_host: 192.168.100.41
-      vmid: 101
-      state: present
-      snapname: before-patching-snap

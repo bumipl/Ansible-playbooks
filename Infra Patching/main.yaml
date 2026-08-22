@@ -1,8 +1,0 @@
----
-- name: Bartek's infra patching 
-  hosts: all
-  become: yes
-
-  roles:
-    - snapshots
-    - patching

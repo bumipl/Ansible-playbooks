@@ -1,0 +1,8 @@
+---
+# Directories searched recursively for docker-compose.yml / docker-compose.yaml
+compose_search_paths:
+  - /export/docker
+
+# Set to true to reboot after patching even if the OS itself did not require it
+# (e.g. only Docker images were updated). The OS-required reboot is always honoured.
+reboot_always: true

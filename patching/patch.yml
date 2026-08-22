@@ -1,0 +1,182 @@
+---
+# =============================================================================
+# Raspberry Pi – OS Patching + Docker Stack Update
+# =============================================================================
+# What this playbook does (in order):
+#   1. Collects pre-patch info  – running containers and compose file locations
+#   2. Patches the OS           – apt update + full-upgrade + autoremove
+#   3. Updates Docker images    – docker compose pull for every discovered stack
+#   4. Restarts the stacks      – docker compose up -d --remove-orphans
+#   5. Verifies containers      – shows running containers after the update
+#   6. Reboots                  – always (controlled by reboot_always var) or
+#                                 when the OS marks /var/run/reboot-required
+# =============================================================================
+
+- name: Raspberry Pi – OS patching and Docker stack update
+  hosts: all
+  become: true
+  gather_facts: true
+
+  # Go-template placeholders must be kept opaque from Ansible's Jinja2 engine.
+  # The !unsafe tag prevents double-interpolation of {{ }} tokens.
+  vars:
+    _docker_fmt_full: !unsafe "table {{.Names}}\\t{{.Image}}\\t{{.Status}}\\t{{.Ports}}"
+    _docker_fmt_short: !unsafe "table {{.Names}}\\t{{.Image}}\\t{{.Status}}"
+
+  # ---------------------------------------------------------------------------
+  # BLOCK 1 – Pre-patch information gathering
+  # ---------------------------------------------------------------------------
+  tasks:
+
+  - name: "[INFO] System overview"
+    debug:
+      msg:
+      - "Host        : {{ inventory_hostname }} ({{ ansible_host }})"
+      - "OS          : {{ ansible_distribution }} {{ ansible_distribution_version }} ({{ ansible_architecture }})"
+      - "Kernel      : {{ ansible_kernel }}"
+      - "Uptime (s)  : {{ ansible_uptime_seconds }}"
+
+  - name: "[INFO] Running Docker containers before patching"
+    shell: >-
+      docker ps --format "{{ _docker_fmt_full }}"
+    register: containers_before
+    changed_when: false
+
+  - name: "[INFO] Show containers before patching"
+    debug:
+      msg: "{{ containers_before.stdout_lines }}"
+
+  - name: "[INFO] Discover all Docker Compose stack files"
+    find:
+      paths: "{{ compose_search_paths }}"
+      patterns:
+      - "docker-compose.yml"
+      - "docker-compose.yaml"
+      recurse: true
+      follow: false
+    register: compose_files
+
+  - name: "[INFO] Show discovered compose stacks"
+    debug:
+      msg: >-
+        Found {{ compose_files.matched }} stack(s): {{ compose_files.files | map(attribute='path') | list }}
+
+  # ---------------------------------------------------------------------------
+  # BLOCK 2 – OS patching
+  # ---------------------------------------------------------------------------
+
+  - name: "[PATCH] Refresh apt cache"
+    apt:
+      update_cache: true
+      cache_valid_time: 0
+
+  - name: "[PATCH] Full system upgrade (apt full-upgrade)"
+    apt:
+      upgrade: full
+      autoremove: true
+      autoclean: true
+    register: apt_result
+
+  - name: "[PATCH] Apt upgrade summary"
+    debug:
+      msg: "{{ apt_result.stdout_lines | default(['No packages were upgraded.']) }}"
+
+  # ---------------------------------------------------------------------------
+  # BLOCK 3 – Docker image pulls
+  # ---------------------------------------------------------------------------
+
+  - name: "[DOCKER] Pull latest images for each stack"
+    shell: |
+      set -euo pipefail
+      echo ">>> Stack directory: $(pwd)"
+      docker compose pull
+    args:
+      executable: /bin/bash
+      chdir: "{{ item.path | dirname }}"
+    loop: "{{ compose_files.files }}"
+    loop_control:
+      label: "{{ item.path | dirname | basename }}"
+    register: pull_results
+    # 'docker compose pull' exits 0 even when nothing changed, so detect
+    # a real pull by checking for "Pulled" in the output.
+    changed_when: "'Pulled' in pull_results.stdout"
+
+  - name: "[DOCKER] Show pull output per stack"
+    debug:
+      msg: "{{ item.stdout_lines }}"
+    loop: "{{ pull_results.results }}"
+    loop_control:
+      label: "{{ item.item.path | dirname | basename }}"
+    when: item.stdout_lines | length > 0
+
+  # ---------------------------------------------------------------------------
+  # BLOCK 4 – Restart stacks with updated images
+  # ---------------------------------------------------------------------------
+
+  - name: "[DOCKER] Recreate containers with updated images"
+    shell: |
+      set -euo pipefail
+      echo ">>> Stack directory: $(pwd)"
+      docker compose up -d --remove-orphans
+    args:
+      executable: /bin/bash
+      chdir: "{{ item.path | dirname }}"
+    loop: "{{ compose_files.files }}"
+    loop_control:
+      label: "{{ item.path | dirname | basename }}"
+    register: up_results
+
+  - name: "[DOCKER] Show compose up output per stack"
+    debug:
+      msg: "{{ item.stdout_lines }}"
+    loop: "{{ up_results.results }}"
+    loop_control:
+      label: "{{ item.item.path | dirname | basename }}"
+    when: item.stdout_lines | length > 0
+
+  # ---------------------------------------------------------------------------
+  # BLOCK 5 – Post-update container verification
+  # ---------------------------------------------------------------------------
+
+  - name: "[VERIFY] Running containers after update"
+    shell: >-
+      docker ps --format "{{ _docker_fmt_short }}"
+    register: containers_after
+    changed_when: false
+
+  - name: "[VERIFY] Show containers after update"
+    debug:
+      msg: "{{ containers_after.stdout_lines }}"
+
+  # ---------------------------------------------------------------------------
+  # BLOCK 6 – Reboot
+  # ---------------------------------------------------------------------------
+
+  - name: "[REBOOT] Check OS reboot flag"
+    stat:
+      path: /var/run/reboot-required
+    register: reboot_flag
+
+  - name: "[REBOOT] Reboot decision"
+    debug:
+      msg:
+      - "OS requires reboot  : {{ reboot_flag.stat.exists }}"
+      - "Packages upgraded   : {{ apt_result.changed }}"
+      - "reboot_always flag  : {{ reboot_always | bool }}"
+      - "Will reboot         : {{ reboot_flag.stat.exists or apt_result.changed or reboot_always | bool }}"
+
+  - name: "[REBOOT] Reboot the Raspberry Pi"
+    reboot:
+      msg: "Rebooting after OS patching – triggered by Ansible"
+      pre_reboot_delay: 5
+      post_reboot_delay: 30
+      reboot_timeout: 300
+      test_command: uptime
+    when: reboot_flag.stat.exists or apt_result.changed or reboot_always | bool
+
+  - name: "[DONE] Patching complete"
+    debug:
+      msg:
+      - "Raspberry Pi has been successfully patched."
+      - "OS          : {{ ansible_distribution }} {{ ansible_distribution_version }}"
+      - "All {{ compose_files.matched }} Docker stack(s) have been updated."

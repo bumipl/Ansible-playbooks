@@ -1,3 +1,0 @@
-proxmox ansible_host=192.168.100.41 sequence=wave_2
-oz-prod1 ansible_host=192.168.100.42 sequence=wave_1 
-
