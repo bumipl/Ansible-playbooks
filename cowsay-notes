@@ -1,9 +1,0 @@
-If you want to disable cowsay:
-
-$ export ANSIBLE_NOCOWS=1
-
-or
-
-in ansible.cfg write
-[defaults]
-nocows = 1
